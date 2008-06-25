@@ -1,0 +1,25 @@
+---
+name: MIDI-Tweaks
+version: 0.01
+author:
+  - 'Johan Vromans <jvromans@squirrel.nl>'
+abstract: Enhancements to MIDI.pm.
+license: perl
+resources:
+  license: http://dev.perl.org/licenses/
+requires:
+  MIDI: 0.80
+build_requires:
+  Test::More: 0
+provides:
+  MIDI::Track:
+    file: lib/MIDI/Tweaks.pm
+  MIDI::Tweaks:
+    file: lib/MIDI/Tweaks.pm
+    version: 0.01
+  MIDI::Tweaks::Opus:
+    file: lib/MIDI/Tweaks.pm
+generated_by: Module::Build version 0.2808
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2
