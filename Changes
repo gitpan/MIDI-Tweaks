@@ -1,6 +1,9 @@
 Revision history for MIDI-Tweaks
 
-0.04    Date/time
+0.05    date/time
+	Add midi-dump utility.
+
+0.04    2008-07-13 16:43
 	Add MIDI::Tweaks::is_channel_event.
 	Add MIDI::Tweaks::Opus::change_tempo.
 	Add MIDI::Tweaks::Opus::change_pitch.

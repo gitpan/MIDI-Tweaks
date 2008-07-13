@@ -6,6 +6,7 @@ WriteMakefile
           'INSTALLDIRS' => 'site',
           'NAME' => 'MIDI::Tweaks',
           'EXE_FILES' => [
+                           'script/midi-dump',
                            'script/midi-tweak'
                          ],
           'VERSION_FROM' => 'lib/MIDI/Tweaks.pm',
