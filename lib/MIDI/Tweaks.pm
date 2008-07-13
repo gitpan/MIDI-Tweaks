@@ -9,7 +9,7 @@ MIDI::Tweaks - Enhancements to MIDI.pm.
 
 =cut
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use MIDI;
 use Carp;
@@ -25,6 +25,9 @@ use constant EV_NOTE_VELO    => 4;
 # These if for track_name events.
 use constant EV_MARKER_NAME  => 2;
 
+# Drum channel
+use constant MIDI_CHAN_PERCUSSION => 10;
+
 use base qw(Exporter);
 
 our @EXPORT;
@@ -32,7 +35,7 @@ our @EXPORT_OK;
 
 BEGIN {
     @EXPORT = qw(EV_TYPE EV_TIME EV_CHAN EV_NOTE_PITCH EV_NOTE_VELO EV_MARKER_NAME);
-    @EXPORT_OK = qw(is_note_event is_note_on is_note_off);
+    @EXPORT_OK = qw(is_note_event is_note_on is_note_off is_channel_event);
 }
 
 =head1 SYNOPSIS
@@ -46,6 +49,10 @@ MIDI module.
     # Reset all volume controls.
     $_->change_volume({ value => 100 }) foreach $op->tracks;
 
+    # Slowdown a bit.
+    $op->change_tempo({ ratio => 0.9 });
+
+    # Prepare the individual tracks.
     my $track0  = $op->tracks_r->[0];
     my $acc	= $op->tracks_r->[1]->change_velocity({ value =>  30 });
     my $solo    = $op->tracks_r->[2]->change_velocity({ value => 110 });
@@ -133,6 +140,31 @@ sub is_note_off {
       || $e->[EV_TYPE] eq 'note_on' && !$e->[EV_NOTE_VELO];
 }
 
+=head2 MIDI::Tweaks::is_channel_event
+
+Function. Takes an event (array reference) as argument.
+Returns true if the event aqpplies to specific channel.
+
+=cut
+
+my $evpat;
+INIT {
+    $evpat = qr/^
+		  note_off
+		| note_on
+		| key_after_touch
+		| control_change
+		| patch_change
+		| channel_after_touch
+		| pitch_wheel_change
+		$/x;
+}
+
+sub is_channel_event {
+    my ($e) = shift;
+    $e->[EV_TYPE] =~ $evpat;
+}
+
 =head1 OPUS METHODS
 
 =cut
@@ -160,17 +192,19 @@ sub new {
     return $op;
 }
 
-=head2 MIDI::Tweaks::Opus::write_to_file
+=head2 MIDI::Tweaks::Opus::write_to_handle
 
 Method. Copies the Opus, converts the time stamps to delta times and
-passes the result to MIDI::Opus::write_to_file.
+passes the result to MIDI::Opus::write_to_handle.
+
+Note that this method is used internally by write_to_file.
 
 =cut
 
-sub write_to_file {
+sub write_to_handle {
     my $op = shift->copy;
     $op->time2delta;
-    $op->SUPER::write_to_file(@_);
+    $op->SUPER::write_to_handle(@_);
 }
 
 =head2 MIDI::Tweaks::Opus::dump
@@ -205,27 +239,32 @@ sub check_sanity {
 	$allow_fail = delete $args->{fail};
     }
 
-    my $evpat = qr/^note_off|note_on|key_after_touch|control_change|patch_change|channel_after_touch|pitch_wheel_change$/;
-
     my @channel_seen;
     my $fail;
-    my $tn = 0;
+    my $tn = 1;
     my $ev = 0;
     foreach my $track ( $self->tracks ) {
 	my $chan;
 	foreach ( $track->events ) {
-	    next unless $_->[EV_TYPE] =~ $evpat;
+	    next unless MIDI::Tweaks::is_channel_event($_);
 	    $ev++;
 	    if ( defined $chan ) {
 		if ( $_->[EV_CHAN] != $chan ) {
-		    carp("Sanity failure: track $tn controls channels $chan and ", $_->[EV_CHAN]);
+		    carp("Sanity failure: track $tn controls channels ",
+			 $chan+1,
+			 " and ",
+			 $_->[EV_CHAN]+1);
 		    $fail++;
 		}
 	    }
 	    else {
 		$chan = $_->[EV_CHAN];
 		if ( $channel_seen[$chan] ) {
-		    carp("Sanity failure: channel $chan is controlled by tracks ", $channel_seen[$chan], " and $tn");
+		    carp("Sanity failure: channel ",
+			 $chan+1,
+			 " is controlled by tracks ",
+			 $channel_seen[$chan]+1,
+			 " and $tn");
 		    $fail++;
 		}
 		$channel_seen[$chan] = $tn;
@@ -279,6 +318,47 @@ sub time2delta {
     my ($self) = @_;
     foreach my $track ( $self->tracks ) {
 	$track->time2delta;
+    }
+}
+
+=head2 MIDI::Tweaks::Opus::change_pitch
+
+Method. One argument, the options hash.
+
+Modifies the pitch of the Opus.
+
+This method just calls MIDI::Track::change_pitch on all tracks. See
+L<MIDI::Track::change_pitch> for details. It skips the track
+associated with channel 9 which is typically associated with
+percussion.
+
+=cut
+
+sub change_pitch {
+    my $self = shift;
+    foreach my $track ( $self->tracks ) {
+	next if $track->channel == MIDI::Tweaks::MIDI_CHAN_PERCUSSION; # skip drums
+	$track->change_pitch(@_);
+    }
+}
+
+=head2 MIDI::Tweaks::Opus::change_tempo
+
+Method. One argument, the options hash.
+
+Modifies the tempo settings of the Opus.
+
+The options has must contain either C<< value => number >> or C<<
+ratio => number >>. In the first case, the tempo is set to the
+specified value (beats per minute). In the second case, the tempo is
+changed according to the ratio.
+
+=cut
+
+sub change_tempo {
+    my $self = shift;
+    foreach my $track ( $self->tracks ) {
+	$track->change_tempo(@_);
     }
 }
 
@@ -356,6 +436,24 @@ sub MIDI::Track::name {
 	  if $e->[EV_TYPE] eq 'track_name';
     }
     return;
+}
+
+=head2 MIDI::Track::channel
+
+Method. Returns the channel controlled by this track.
+If none was found, returns zero.
+
+Note that channels are numbered from one, as per MIDI standard.
+
+=cut
+
+sub MIDI::Track::channel {
+    my $track = shift;
+    foreach my $e ( $track->events ) {
+	next unless MIDI::Tweaks::is_channel_event($e);
+	return $e->[EV_CHAN] + 1;
+    }
+    return 0;
 }
 
 =head2 MIDI::Track::delta2time
@@ -468,7 +566,7 @@ sub MIDI::Track::mapper {
     my $track = shift;
 
     my $opts = {};
-    $opts = shift if ref($_[0]) eq 'HASH';
+    $opts = {%{shift()}} if ref($_[0]) eq 'HASH';
 
     my $mapper = shift;
     croak("MIDI::Track::mapper requires a CODE argument")
@@ -481,6 +579,65 @@ sub MIDI::Track::mapper {
     }
 
     $track;
+}
+
+=head2 MIDI::Track::change_pitch
+
+Method. One argument, the options hash.
+
+Changes the pitch of each 'note on' event according to the options.
+
+The options has must contain C<< int => number >>. The number
+indicates the number of half-tones the pitch should be raised. A
+negative number will lower the pitch.
+Any remaining options are passed to the mapper function.
+
+Note that key signatures will be changed as well.
+
+=cut
+
+sub MIDI::Track::change_pitch {
+    my ($track, $args) = @_;
+    croak("MIDI::Track::change_pitch requires a HASH argument")
+      unless ref($args) eq 'HASH';
+    $args = {%$args};
+
+    my $mapper_func;
+    #         C   Db  D   Es  E   F   Gb  G   As  A   Bb  B
+    my @k = ( 0, -5,  2, -3,  4, -1, -6,  1, -4,  3, -2,  5);
+    my %k; $k{$k[$_]} = $_ for 0 .. $#k;
+
+    if ( $args->{int} ) {
+	my $value = int(delete $args->{int});
+
+	$mapper_func = sub {
+	    if ( MIDI::Tweaks::is_note_event($_[0]) ) {
+		$_[0]->[EV_NOTE_PITCH] += $value;
+		croak("MIDI::Track::change_pitch: transposed pitch out of range")
+		  unless $_[0]->[EV_NOTE_PITCH] >= 0 && $_[0]->[EV_NOTE_PITCH] <= 127;
+		return;
+	    }
+	    if ( $_[0]->[0] eq 'key_signature' ) {
+		# Warning: ugly code ahead.
+		# This is expected to be run only a few times.
+		# Don't spent much effort on elegance and optimizing.
+		my $f = $_[0]->[2];	 # current #sharps
+		$f -= 12 if $f >= 6;	 # normalize
+		$f += 12 if $f < -6;
+		$f = $k{$f};		 # get note
+		$f += $value;		 # transpose
+		$f -= 12 while $f >= 12; # normalize
+		$f += 12 while $f < 0;
+		$_[0]->[2] = $k[$f];	 # get #sharps
+		return;
+	    }
+	};
+    }
+
+    croak("MIDI::Track::change_pitch: Missing 'value' or 'ratio' option")
+      unless $mapper_func;
+
+    $track->mapper($args, $mapper_func);
 }
 
 =head2 MIDI::Track::change_velocity
@@ -509,6 +666,7 @@ sub MIDI::Track::change_velocity {
     my ($track, $args) = @_;
     croak("MIDI::Track::change_velocity requires a HASH argument")
       unless ref($args) eq 'HASH';
+    $args = {%$args};
 
     my $mapper_func;
 
@@ -537,6 +695,53 @@ sub MIDI::Track::change_velocity {
     $track->mapper($args, $mapper_func);
 }
 
+=head2 MIDI::Track::change_tempo
+
+Method. One argument, the options hash.
+
+Changes the tempo of a trackaccording to the options.
+
+The options has must contain either C<< value => number >> or C<<
+ratio => number >>. In the first case, each occurence of a tempo event
+is changed to the specified value. In the second case, the tempo is
+changed according to the ratio.
+
+Any remaining options are passed to the mapper function.
+
+Note that usually track 0 controls the tempi for an opus.
+
+=cut
+
+sub MIDI::Track::change_tempo {
+    my ($track, $args) = @_;
+    croak("MIDI::Track::change_tempo requires a HASH argument")
+      unless ref($args) eq 'HASH';
+    $args = {%$args};
+
+    my $mapper_func;
+
+    if ( $args->{value} ) {
+	my $value = int(60000000 / int(delete $args->{value}));
+
+	$mapper_func = sub {
+	    return unless $_[0]->[0] eq 'set_tempo';
+	    $_[0]->[2] = $value;
+	};
+    }
+    elsif ( $args->{ratio} ) {
+	my $ratio = delete $args->{ratio};
+	$mapper_func = sub {
+	    return unless $_[0]->[0] eq 'set_tempo';
+	    $_[0]->[2] = int($_[0]->[2] / $ratio);
+	};
+    }
+
+    croak("MIDI::Track::change_tempo: Missing 'value' or 'ratio' option")
+      unless $mapper_func;
+
+    $track->mapper($args, $mapper_func);
+}
+
 =head2 MIDI::Track::change_volume
 
 Method. One argument, the options hash.
@@ -556,6 +761,7 @@ sub MIDI::Track::change_volume {
     my ($track, $args) = @_;
     croak("MIDI::Track::change_volume requires a HASH argument")
       unless ref($args) eq 'HASH';
+    $args = {%$args};
 
     my $mapper_func;
 
@@ -615,6 +821,7 @@ sub MIDI::Track::split_pitch {
     $args ||= {};
     croak("MIDI::Track::split_pitch requires a HASH argument")
       unless ref($args) eq 'HASH';
+    $args = {%$args};
 
     my $split ||= 56;
 
@@ -664,7 +871,7 @@ sub MIDI::Track::split_pitch {
 
 =head2 MIDI::Track::split_hilo
 
-Method. One argument, the options hash.
+Method. No arguments.
 
 The track is split into two tracks, high and low.
 
@@ -757,7 +964,7 @@ sub MIDI::Track::split_hilo {
 
 =head2 MIDI::Track::split_hml
 
-Method. One argument, the options hash.
+Method. No arguments.
 
 The track is split into three tracks, high, middle and low.
 

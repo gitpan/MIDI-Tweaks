@@ -5,7 +5,9 @@ WriteMakefile
           'PL_FILES' => {},
           'INSTALLDIRS' => 'site',
           'NAME' => 'MIDI::Tweaks',
-          'EXE_FILES' => [],
+          'EXE_FILES' => [
+                           'script/midi-tweak'
+                         ],
           'VERSION_FROM' => 'lib/MIDI/Tweaks.pm',
           'PREREQ_PM' => {
                            'Test::More' => 0,
