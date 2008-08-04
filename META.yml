@@ -1,6 +1,6 @@
 ---
 name: MIDI-Tweaks
-version: 0.06
+version: 0.07
 author:
   - 'Johan Vromans <jvromans@squirrel.nl>'
 abstract: Enhancements to MIDI.pm.
@@ -14,7 +14,7 @@ build_requires:
 provides:
   MIDI::Tweaks:
     file: lib/MIDI/Tweaks.pm
-    version: 0.06
+    version: 0.07
   MIDI::Tweaks::Opus:
     file: lib/MIDI/Tweaks.pm
 generated_by: Module::Build version 0.2808
